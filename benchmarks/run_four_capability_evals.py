@@ -71,7 +71,7 @@ def load_ckpt(ckpt_path: str, device: str):
 
 
 class Encoder:
-    def __init__(self, is_mc: bool, lane_paths: List[str] = None, ckpt_path: str = None):
+    def __init__(self, is_mc: bool, lane_paths: List[str] = None, ckpt_path: str = None, config: dict = None):
         self.is_mc = is_mc
         if is_mc:
             lane_paths = lane_paths or DEFAULT_LANES
@@ -99,6 +99,10 @@ class Encoder:
             self.is_hybrid = False
             ckpt_dir = os.path.dirname(ckpt_path) if ckpt_path else ""
             mp = os.path.join(ckpt_dir, "meta.pkl") if ckpt_dir and os.path.exists(os.path.join(ckpt_dir, "meta.pkl")) else None
+            if not mp and config and "dataset" in config:
+                cand = os.path.join(REPO_ROOT, "data", config["dataset"], "meta.pkl")
+                if os.path.exists(cand):
+                    mp = cand
             if not mp:
                 mp = os.path.join(REPO_ROOT, "data", "korean_pos_mc", "char", "meta.pkl")
             if not os.path.exists(mp):
@@ -114,8 +118,14 @@ class Encoder:
                 n_lanes = len(self.stois)
                 token_lists = [[] for _ in range(n_lanes)]
                 for step in steps:
-                    for i in range(min(n_lanes, len(step))):
+                    for i in range(min(24, len(step))):
                         token_lists[i].append(step[i])
+                    if n_lanes >= 25:
+                        if step[0] == self.tok.hangul_id:
+                            char_id = ((step[1] - 1) * 588 + (step[2] - 1) * 28 + step[3]) + 1
+                        else:
+                            char_id = 0
+                        token_lists[24].append(char_id)
                 return token_lists
             else:
                 seq = self.tok.encode_text(text)
@@ -124,12 +134,19 @@ class Encoder:
                 for item in seq:
                     ch = item["char"]
                     indices = item["indices"]
-                    for i in range(min(24, n_lanes - 1)):
-                        t_char = self.tok.token_for(i, indices[i])
-                        token_lists[i].append(self.stois[i].get(t_char, 0))
-                    if n_lanes > 24:
-                        byte_id = self.stois[24].get(ch, ch.encode("utf-8")[0] if len(ch) > 0 and ord(ch) > 255 else 0)
-                        token_lists[24].append(byte_id)
+                    if n_lanes == 4:
+                        byte_id = self.stois[0].get(ch, ch.encode("utf-8")[0] if len(ch) > 0 and ord(ch) > 255 else 0)
+                        token_lists[0].append(byte_id)
+                        for idx, factor_idx in enumerate([1, 2, 3], start=1):
+                            t_char = self.tok.token_for(factor_idx, indices[factor_idx])
+                            token_lists[idx].append(self.stois[idx].get(t_char, 0))
+                    else:
+                        for i in range(min(24, n_lanes - 1)):
+                            t_char = self.tok.token_for(i, indices[i])
+                            token_lists[i].append(self.stois[i].get(t_char, 0))
+                        if n_lanes > 24:
+                            byte_id = self.stois[24].get(ch, ch.encode("utf-8")[0] if len(ch) > 0 and ord(ch) > 255 else 0)
+                            token_lists[24].append(byte_id)
                 return token_lists
         else:
             return self.encode_fn(text)
@@ -228,7 +245,7 @@ def run_evaluations_for_ckpt(ckpt_name: str, ckpt_path: str, device: str, max_ex
     model, config = load_ckpt(ckpt_path, device)
     is_mc = getattr(model.config, "multicontext", False)
     lanes = config.get("multicontext_datasets") or DEFAULT_LANES
-    encoder = Encoder(is_mc=is_mc, lane_paths=lanes, ckpt_path=ckpt_path)
+    encoder = Encoder(is_mc=is_mc, lane_paths=lanes, ckpt_path=ckpt_path, config=config)
 
     results = {"checkpoint": ckpt_name, "is_multicontext": is_mc}
 

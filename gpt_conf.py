@@ -49,9 +49,13 @@ class GPTConfig:
 
     # For multicontext training
     multicontext: bool = False
+    three_hot_conditional: bool = False
     # Use separate embeddings/LM heads per dataset in multidataset mode
     multidataset_wte: bool = False
     vocab_sizes: List[int] = field(default_factory=lambda: []) # Used in place of vocab
+    output_only_lanes: List[int] = field(default_factory=list) # Indices of lanes that only have lm_head (no input wte)
+    fused_lm_head: bool = False # Fuse multicontext LM heads into a single linear projection for deployment/training
+    model_backbone: str | None = None # Pretrained backbone (e.g. 'gemma3_270m' or None for default GPT)
 
     # MLP bias configuration
     mlp_up_bias: bool | None = None  # If None, uses global bias setting

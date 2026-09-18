@@ -51,6 +51,12 @@ from variations.attention_residual_variations import FullAttentionResidual
 
 class GPT(nn.Module):
 
+    def __new__(cls, config, *args, **kwargs):
+        if getattr(config, 'model_backbone', None) == 'gemma3_270m':
+            from gemma3_continual_model import Gemma3ContinualModel
+            return Gemma3ContinualModel(config, *args, **kwargs)
+        return super().__new__(cls)
+
     def __init__(self, config):
         super().__init__()
         assert config.vocab_size is not None
@@ -132,10 +138,16 @@ class GPT(nn.Module):
             else:
                 #TODO: currently multicontext is in own category, add support later for WTE factorization
                 if (config.multicontext or config.multidataset_wte) and not self.uses_numerical_multicontext:
+                    output_only = set(getattr(self.config, 'output_only_lanes', []) or [])
                     for i, vocab_size in enumerate(self.config.vocab_sizes):
-                        embedding_layer = nn.Embedding(vocab_size, config.n_embd)
-                        self.transformer[f'wte_{i}'] = embedding_layer
+                        if i not in output_only:
+                            embedding_layer = nn.Embedding(vocab_size, config.n_embd)
+                            self.transformer[f'wte_{i}'] = embedding_layer
                         self.transformer[f'lm_head_{i}'] = nn.Linear(config.n_embd, vocab_size, bias=False)
+                    if getattr(config, 'three_hot_conditional', False):
+                        self.cond_W_e = nn.Linear(config.n_embd, config.n_embd, bias=False)
+                        self.cond_W_h = nn.Linear(config.n_embd, config.n_embd, bias=True)
+                        self.cond_h0 = nn.Parameter(torch.zeros(1, 1, config.n_embd))
                 else:
                     # no factorization
                     word_embd = nn.Embedding(config.vocab_size, config.n_embd)
@@ -174,8 +186,10 @@ class GPT(nn.Module):
         else:
             #TODO: currently multicontext is in own category, add support later for WTE factorization
             if (config.multicontext or config.multidataset_wte) and not self.uses_numerical_multicontext:
+                output_only = set(getattr(self.config, 'output_only_lanes', []) or [])
                 for i, vocab_size in enumerate(self.config.vocab_sizes):
-                    self.transformer[f'lm_head_{i}'].weight = self.transformer[f'wte_{i}'].weight
+                    if i not in output_only:
+                        self.transformer[f'lm_head_{i}'].weight = self.transformer[f'wte_{i}'].weight
             else:
                 self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
@@ -202,8 +216,10 @@ class GPT(nn.Module):
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
         if self.wte_weight_tying:
             if (config.multicontext or config.multidataset_wte) and not self.uses_numerical_multicontext:
+                output_only = set(getattr(self.config, 'output_only_lanes', []) or [])
                 for i, vocab_size in enumerate(self.config.vocab_sizes):
-                    self.transformer[f'lm_head_{i}'].weight = self.transformer[f'wte_{i}'].weight
+                    if i not in output_only:
+                        self.transformer[f'lm_head_{i}'].weight = self.transformer[f'wte_{i}'].weight
             else:
                 self.lm_head.weight = self.transformer.wte.weight # https://paperswithcode.com/method/weight-tying
 
@@ -263,6 +279,25 @@ class GPT(nn.Module):
     def compute_lm_head_logits(self, x, lm_head_module):
         weight = self.apply_lm_head_norm(lm_head_module.weight)
         return F.linear(x, weight, lm_head_module.bias)
+
+    def fuse_lm_heads(self):
+        """Fuse multiple multicontext LM heads into a single contiguous nn.Linear projection for deployment/inference."""
+        if not (self.config.multicontext or self.config.multidataset_wte) or not self.config.vocab_sizes:
+            return self
+        total_vocab = sum(self.config.vocab_sizes)
+        fused_head = nn.Linear(self.config.n_embd, total_vocab, bias=False)
+        device = self.transformer['lm_head_0'].weight.device
+        dtype = self.transformer['lm_head_0'].weight.dtype
+        fused_head = fused_head.to(device=device, dtype=dtype)
+        with torch.no_grad():
+            fused_weight = torch.cat(
+                [self.transformer[f'lm_head_{i}'].weight for i in range(len(self.config.vocab_sizes))],
+                dim=0
+            )
+            fused_head.weight.copy_(fused_weight)
+        self.transformer['lm_head_fused'] = fused_head
+        self.is_fused_head = True
+        return self
 
     def _forward_full_attention_residual(self, x, iter_num):
         """Run blocks while retaining each sublayer output as a depth source."""
@@ -429,8 +464,11 @@ class GPT(nn.Module):
 
             x = None
 
+            output_only = set(getattr(self.config, 'output_only_lanes', []) or [])
             # Add all of the input tokens
             for i, tokens in enumerate(token_list):
+                if i in output_only:
+                    continue
                 if self.uses_numerical_multicontext:
                     module = self.numerical_embeddings[str(i)]
                     param = next(module.parameters())
@@ -541,7 +579,34 @@ class GPT(nn.Module):
                     logits = [pred[:, [-1], :] for pred in logits]
                     losses = None
             else:
-                logits = [self.compute_lm_head_logits(x, self.transformer[f'lm_head_{i}']) for i in range(len(token_list))]
+                if getattr(self.config, 'three_hot_conditional', False) and len(token_list) >= 4:
+                    logits_0 = self.compute_lm_head_logits(x, self.transformer['lm_head_0'])
+                    b, t, d = x.size()
+                    h0_exp = self.cond_h0.expand(b, t, d)
+                    h_i = torch.tanh(self.cond_W_e(x) + self.cond_W_h(h0_exp))
+                    logits_1 = self.compute_lm_head_logits(h_i, self.transformer['lm_head_1'])
+                    idx_i = target_list[1].clamp(min=0) if target_list is not None else torch.argmax(logits_1, dim=-1)
+                    emb_i = self.transformer['wte_1'](idx_i)
+                    h_v = torch.tanh(self.cond_W_e(emb_i) + self.cond_W_h(h_i))
+                    logits_2 = self.compute_lm_head_logits(h_v, self.transformer['lm_head_2'])
+                    idx_v = target_list[2].clamp(min=0) if target_list is not None else torch.argmax(logits_2, dim=-1)
+                    emb_v = self.transformer['wte_2'](idx_v)
+                    h_f = torch.tanh(self.cond_W_e(emb_v) + self.cond_W_h(h_v))
+                    logits_3 = self.compute_lm_head_logits(h_f, self.transformer['lm_head_3'])
+                    logits = [logits_0, logits_1, logits_2, logits_3]
+                elif getattr(self, 'is_fused_head', False) or getattr(self.config, 'fused_lm_head', False):
+                    num_heads = len(self.config.vocab_sizes)
+                    if 'lm_head_fused' in self.transformer:
+                        weight = self.apply_lm_head_norm(self.transformer['lm_head_fused'].weight)
+                        fused_logits = F.linear(x, weight)
+                    else:
+                        weight = torch.cat([self.transformer[f'lm_head_{i}'].weight for i in range(num_heads)], dim=0)
+                        weight = self.apply_lm_head_norm(weight)
+                        fused_logits = F.linear(x, weight)
+                    logits = list(torch.split(fused_logits, self.config.vocab_sizes, dim=-1))
+                else:
+                    num_heads = len(self.config.vocab_sizes)
+                    logits = [self.compute_lm_head_logits(x, self.transformer[f'lm_head_{i}']) for i in range(num_heads)]
 
                 # Soft‑cap **each** logits tensor (training & inference)
                 if self.config.final_logit_softcapping is not None:
@@ -556,7 +621,9 @@ class GPT(nn.Module):
                 if target_list is not None:
                     # If we do want to compute losses for each context
                     losses = []
-                    for i in range(len(token_list)):
+                    for i in range(len(target_list)):
+                        if target_list[i].numel() == 0:
+                            continue
                         if loss_fn is None:
                             loss_i = F.cross_entropy(
                                 logits[i].view(-1, logits[i].size(-1)),

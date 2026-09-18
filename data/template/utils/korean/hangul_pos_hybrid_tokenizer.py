@@ -177,6 +177,8 @@ class HangulHybridPosTokenizer:
             str(ord(char) % 64),
         ]
 
+    _SEGMENT_PATTERN = re.compile(r"([가-힣]+|[^가-힣]+)")
+
     def encode_text(
         self,
         text: str,
@@ -198,14 +200,13 @@ class HangulHybridPosTokenizer:
                     char_pos_tags[idx] = tag
 
         # 2. Segment text into Korean syllables vs non-Korean chunks
-        pattern = re.compile(r"([가-힣]+|[^가-힣]+)")
-        segments = [m.group(0) for m in pattern.finditer(text)]
+        segments = [m.group(0) for m in self._SEGMENT_PATTERN.finditer(text)]
 
         encoded_steps: List[List[int]] = []
         cur_pos = 0
 
         for seg in segments:
-            if re.match(r"^[가-힣]+$", seg):
+            if self.is_hangul_syllable(seg[0]):
                 # Pure Korean syllable segment
                 for ch in seg:
                     raw_tag = char_pos_tags.get(cur_pos, "UNK")
@@ -248,16 +249,11 @@ class HangulHybridPosTokenizer:
             l0 = step[0]
             if l0 == self.hangul_id:
                 flush_bpe()
-                cho_val = self.id_to_value[1][step[1]]
-                jung_val = self.id_to_value[2][step[2]]
-                jong_val = self.id_to_value[3][step[3]]
-                try:
-                    l = CHOSEONG.index(cho_val)
-                    v = JUNGSEONG.index(jung_val)
-                    t = JONGSEONG.index(jong_val)
+                l = step[1] - 1
+                v = step[2] - 1
+                t = step[3]
+                if 0 <= l < L_COUNT and 0 <= v < V_COUNT and 0 <= t < T_COUNT:
                     out_tokens.append(chr(S_BASE + (l * V_COUNT + v) * T_COUNT + t))
-                except (ValueError, IndexError):
-                    out_tokens.append("")
             else:
                 bpe_buffer.append(l0)
 

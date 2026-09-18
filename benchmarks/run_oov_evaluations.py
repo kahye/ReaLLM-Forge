@@ -30,10 +30,10 @@ from hangul_factorizer import HangulPosFactorizedTokenizer
 
 MODELS_CONFIG: Dict[str, Dict[str, Any]] = {
     "baseline_character": {
-        "display_name": "Original Character Baseline (V=4,555)",
-        "ckpt_path": "out_baseline_korean_pos_full1m/ckpt.pt",
+        "display_name": "Baseline Character Tokenizer (V=4,924)",
+        "ckpt_path": "out_baseline_korean_pos/best_ckpt.pt" if (os.path.exists("out_baseline_korean_pos/best_ckpt.pt") or os.path.exists("out_baseline_korean_pos/ckpt.pt")) else "out_baseline_korean_pos_full1m/ckpt.pt",
         "type": "single_char",
-        "meta_path": "out_baseline_korean_pos_full1m/meta.pkl",
+        "meta_path": "out_baseline_korean_pos/meta.pkl" if os.path.exists("out_baseline_korean_pos/meta.pkl") else "out_baseline_korean_pos_full1m/meta.pkl",
     },
     "byte_fallback_bpe": {
         "display_name": "Byte-Fallback BPE Baseline (V=4,924)",
@@ -113,6 +113,18 @@ MODELS_CONFIG: Dict[str, Dict[str, Any]] = {
         "type": "mc_hybrid_nochar",
         "pos_mode": "full",
     },
+    "nochar_coarse_pos_new_weighted": {
+        "display_name": "No-Char Coarse POS (New Winning Weights, wjamo=1.0)",
+        "ckpt_path": "out_mc_nochar_coarse_pos_new_weighted/best_ckpt.pt",
+        "type": "mc_hybrid_nochar",
+        "pos_mode": "coarse",
+    },
+    "nochar_full_pos_new_weighted": {
+        "display_name": "No-Char Full POS (New Winning Weights, wjamo=1.0)",
+        "ckpt_path": "out_mc_nochar_full_pos_new_weighted/best_ckpt.pt",
+        "type": "mc_hybrid_nochar",
+        "pos_mode": "full",
+    },
 }
 
 DEFAULT_LANES_COARSE = [
@@ -137,6 +149,14 @@ DEFAULT_LANES_FULL = [
 
 
 def load_model(ckpt_path: str, device: str) -> tuple[GPT, dict]:
+    ckpt_dir = os.path.dirname(ckpt_path)
+    best_candidate = os.path.join(ckpt_dir, "best_ckpt.pt")
+    if os.path.exists(best_candidate):
+        ckpt_path = best_candidate
+    elif not os.path.exists(ckpt_path):
+        fallback_cand = os.path.join(ckpt_dir, "ckpt.pt")
+        if os.path.exists(fallback_cand):
+            ckpt_path = fallback_cand
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"Checkpoint {ckpt_path} does not exist.")
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
@@ -222,8 +242,12 @@ def main() -> None:
         with open(mp, "rb") as f:
             mc_stois_full.append(pickle.load(f)["stoi"])
 
+    from hangul_pos_hybrid_tokenizer import HangulHybridPosTokenizer
+    spm_path = os.path.join(REPO_ROOT, "data", "korean_pos_mc_nochar", "spm_non_korean.model")
     tok_full = HangulPosFactorizedTokenizer(use_pos=True, pos_mode="full")
     tok_coarse = HangulPosFactorizedTokenizer(use_pos=True, pos_mode="coarse")
+    tok_hybrid_full = HangulHybridPosTokenizer(spm_path, use_pos=True, pos_mode="full")
+    tok_hybrid_coarse = HangulHybridPosTokenizer(spm_path, use_pos=True, pos_mode="coarse")
 
     results_data: Dict[str, Any] = {
         "metadata": {
@@ -343,9 +367,7 @@ def main() -> None:
                 is_hybrid_nochar = (m_type == "mc_hybrid_nochar")
 
                 if is_hybrid_nochar:
-                    from hangul_pos_hybrid_tokenizer import HangulHybridPosTokenizer
-                    spm_path = os.path.join(REPO_ROOT, "data", "korean_pos_mc_nochar", "spm_non_korean.model")
-                    tok_hybrid = HangulHybridPosTokenizer(spm_path, use_pos=True, pos_mode=pos_mode)
+                    tok_hybrid = tok_hybrid_full if pos_mode == "full" else tok_hybrid_coarse
                     steps = tok_hybrid.encode_text(prompt_text)
                     n_lanes = 24
                     token_lists: List[List[int]] = [[] for _ in range(n_lanes)]
