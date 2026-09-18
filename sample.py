@@ -1280,7 +1280,7 @@ def get_tokenizer_functions(meta):
     if 'tokenizer' not in meta:
         # Default character-level tokenizer
         stoi, itos = meta['stoi'], meta['itos']
-        encode = lambda s: [stoi[c] for c in s]
+        encode = lambda s: [stoi.get(c, 0) for c in s]
         decode = lambda l: ''.join([itos[i] for i in l])
         return encode, decode
 

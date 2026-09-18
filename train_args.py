@@ -369,12 +369,30 @@ def parse_args():
     model_group.add_argument('--norm_channel_radius_learning', type=bool, default=None, action=argparse.BooleanOptionalAction)
     model_group.add_argument('--multicontext', default=False, action=argparse.BooleanOptionalAction,
                                     help="Enable multi-context training on multiple simultaneous datasets")
+    model_group.add_argument('--three_hot_conditional', default=False, action=argparse.BooleanOptionalAction,
+                                    help="Enable 3-step conditional RNN output head for Three-Hot tokenizer (Cognetta et al., EACL 2023)")
     model_group.add_argument('--multidataset_wte', default=False, action=argparse.BooleanOptionalAction,
                                     help='Use separate token embeddings and lm heads per dataset when training_mode is multidataset')
     training_group.add_argument('--multicontext_datasets', default=None, nargs='+', type=str,
                                     help="List of datasets to train on in multi-context mode (e.g., --multicontext_datasets shakespeare wikitext103 openwebtext)")
     model_group.add_argument('--vocab_sizes', default=None, nargs='+', type=int,
                                     help="List of vocabulary sizes for each dataset in --multicontext_datasets")
+    training_group.add_argument('--multicontext_loss_weights', default=None, nargs='+', type=float,
+                                    help="Optional list of loss weights corresponding to each dataset in --multicontext_datasets")
+    training_group.add_argument('--structural_loss_weight', default=1.0, type=float,
+                                    help="Weight for purely structural factor lanes during multicontext loss calculation (e.g. 0.1 to down-weight structural factors relative to char and pos)")
+    training_group.add_argument('--pos_loss_weight', default=None, type=float,
+                                    help="Weight for POS tag head in multicontext loss calculation (defaults to 0.5 when structural_loss_weight is set)")
+    training_group.add_argument('--char_loss_weight', default=None, type=float,
+                                    help="Weight for character/syllable output head in multicontext loss calculation (defaults to 1.0)")
+    model_group.add_argument('--output_only_lanes', default=None, nargs='+', type=int,
+                                    help="List of 0-based lane indices in --multicontext_datasets that are output-only (have lm_head but no input wte)")
+    model_group.add_argument('--fused_lm_head', default=False, action=argparse.BooleanOptionalAction,
+                                    help="Fuse multiple multicontext LM heads into a single linear projection for deployment and faster execution")
+    model_group.add_argument('--model_backbone', default=None, type=str,
+                                    help="Pretrained backbone architecture to use (e.g. 'gemma3_270m' or None for default GPT)")
+    training_group.add_argument('--output_only_datasets', default=None, nargs='+', type=str,
+                                    help="List of dataset names in --multicontext_datasets that are output-only (have lm_head but no input wte)")
 
     # Batch sampling args
     training_group.add_argument('--sampling_method', default="random",
