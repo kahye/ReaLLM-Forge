@@ -27,6 +27,20 @@ Downstream Benchmarks:
 5. OOV & Unicode Stress-Test
 """
 from __future__ import annotations
+import os, os as _os, sys as _sys
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+for _p in [
+    _REPO_ROOT,
+    _os.path.join(_REPO_ROOT, "benchmarks"),
+    _os.path.join(_REPO_ROOT, "benchmarks", "korean_pos_suite", "training"),
+    _os.path.join(_REPO_ROOT, "benchmarks", "korean_pos_suite", "evaluations"),
+    _os.path.join(_REPO_ROOT, "benchmarks", "korean_pos_suite", "reporting"),
+    _os.path.join(_REPO_ROOT, "data", "korean_pos_mc"),
+    _os.path.join(_REPO_ROOT, "huggingface_model", "gemma"),
+    _os.path.join(_REPO_ROOT, "data", "template", "utils", "korean"),
+]:
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
 
 import argparse
 import json
@@ -38,7 +52,7 @@ from typing import Any, Dict, List
 
 import torch
 
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
 EVAL_TARGETS = [

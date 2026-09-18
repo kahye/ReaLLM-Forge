@@ -10,6 +10,20 @@ Produces:
   * Lane 23 (Full): pos_full (46 Sejong tags)
 """
 from __future__ import annotations
+import os, os as _os, sys as _sys
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+for _p in [
+    _REPO_ROOT,
+    _os.path.join(_REPO_ROOT, "benchmarks"),
+    _os.path.join(_REPO_ROOT, "benchmarks", "korean_pos_suite", "training"),
+    _os.path.join(_REPO_ROOT, "benchmarks", "korean_pos_suite", "evaluations"),
+    _os.path.join(_REPO_ROOT, "benchmarks", "korean_pos_suite", "reporting"),
+    _os.path.join(_REPO_ROOT, "data", "korean_pos_mc"),
+    _os.path.join(_REPO_ROOT, "huggingface_model", "gemma"),
+    _os.path.join(_REPO_ROOT, "data", "template", "utils", "korean"),
+]:
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
 
 import argparse
 import os
@@ -22,7 +36,7 @@ from typing import Dict, List
 import numpy as np
 from tqdm import tqdm
 
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO_ROOT, "data", "template", "utils", "korean"))
 
 from hangul_pos_hybrid_tokenizer import (
@@ -118,11 +132,28 @@ def main():
     with open(pos_full_dir / "meta.pkl", "wb") as f:
         pickle.dump(meta_full, f)
 
-    print(f"Saved meta.pkl for all 24 lanes (including pos and pos_full) in {out_root}")
+    # Save output-only char lane meta.pkl (PAD + 11,172 Hangul syllables)
+    char_dir = out_root / "char"
+    char_dir.mkdir(parents=True, exist_ok=True)
+    char_values = ["<PAD>"] + [chr(0xAC00 + i) for i in range(11172)]
+    stoi_char = {ch: idx for idx, ch in enumerate(char_values)}
+    itos_char = {idx: ch for idx, ch in enumerate(char_values)}
+    meta_char = {
+        "vocab_size": len(char_values),
+        "tokenizer": "hangul_hybrid_lane_char_output_only",
+        "lane_index": 24,
+        "lane_name": "char",
+        "stoi": stoi_char,
+        "itos": itos_char,
+    }
+    with open(char_dir / "meta.pkl", "wb") as f:
+        pickle.dump(meta_char, f)
+
+    print(f"Saved meta.pkl for all lanes (including pos, pos_full, and char) in {out_root}")
 
     # Step 4: Batch process corpus
     print("\n==========================================================================")
-    print(" STEP 3: Tagging and Encoding Corpus across 24 Lanes")
+    print(" STEP 3: Tagging and Encoding Corpus across Lanes")
     print("==========================================================================")
     kiwi = Kiwi(num_workers=args.num_workers)
     print(f"Initialized Kiwi with {args.num_workers} workers.")
@@ -133,12 +164,13 @@ def main():
     total_lines = len(lines)
     print(f"Loaded {total_lines:,} lines from {args.input_file}.")
 
-    # Collect 25 token arrays: 23 common lanes + pos (coarse) + pos_full
+    # Collect 26 token arrays: 23 common lanes + pos (coarse) + pos_full + char
     # Lane 0: script_bpe
     # Lanes 1..22: factor lanes
     # Lane 23: pos (coarse)
     # Lane 24: pos_full
-    all_lane_tokens: List[List[int]] = [[] for _ in range(25)]
+    # Lane 25: char (Hangul syllable ID 1..11172 or 0 for non-Hangul)
+    all_lane_tokens: List[List[int]] = [[] for _ in range(26)]
 
     t0 = time.time()
     for b_start in range(0, total_lines, args.batch_size):
@@ -197,6 +229,14 @@ def main():
                 for lane_i in range(24):
                     all_lane_tokens[lane_i].append(step[lane_i])
                 all_lane_tokens[24].append(pos_full_ids[step_idx])
+                if step[0] == tok_coarse.hangul_id:
+                    c_idx = step[1] - 1
+                    v_idx = step[2] - 1
+                    f_idx = step[3]
+                    char_id = (c_idx * 588 + v_idx * 28 + f_idx) + 1
+                else:
+                    char_id = 0
+                all_lane_tokens[25].append(char_id)
 
         done = min(b_start + args.batch_size, total_lines)
         elapsed = time.time() - t0
@@ -215,6 +255,7 @@ def main():
     # Map lane names
     lane_dest_dirs = [out_root / name for name in tok_coarse.lane_names]  # 24 lanes
     lane_dest_dirs.append(out_root / "pos_full")  # 25th is pos_full
+    lane_dest_dirs.append(out_root / "char")      # 26th is output-only char lane
 
     for i, dest_dir in enumerate(lane_dest_dirs):
         dest_dir.mkdir(parents=True, exist_ok=True)

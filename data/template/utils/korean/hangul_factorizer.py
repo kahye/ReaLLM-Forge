@@ -228,14 +228,14 @@ class HangulFactorizedTokenizer:
         return encoded_sequence
 
     def decode_indices(self, indices: Sequence[int]) -> str:
-        vals = [self.id_to_value[i][idx] if 0 <= idx < len(self.id_to_value[i]) else PAD for i, idx in enumerate(indices[:23])]
-        if vals[0] != "HANGUL":
+        if len(indices) < 4 or indices[0] != 1:
             return ""
-        try:
-            l, v, t = CHOSEONG.index(vals[1]), JUNGSEONG.index(vals[2]), JONGSEONG.index(vals[3])
-        except ValueError:
-            return ""
-        return chr(S_BASE + (l * V_COUNT + v) * T_COUNT + t)
+        l = indices[1] - 1
+        v = indices[2] - 1
+        t = indices[3]
+        if 0 <= l < L_COUNT and 0 <= v < V_COUNT and 0 <= t < T_COUNT:
+            return chr(S_BASE + (l * V_COUNT + v) * T_COUNT + t)
+        return ""
 
     def token_for(self, lane_index: int, value_id: int) -> str:
         return chr(PUA_BASE + lane_index * 256 + value_id)

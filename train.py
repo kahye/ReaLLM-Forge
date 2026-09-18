@@ -849,17 +849,37 @@ class Trainer:
             # Let the first of the vocab sizes be used for calculation of btc
             self.model_args['vocab_size'] = self.model_args['vocab_sizes'][0]
 
+            output_only_lanes = []
+            if getattr(self.args, "output_only_lanes", None) is not None:
+                output_only_lanes.extend(int(x) for x in self.args.output_only_lanes)
+            if getattr(self.args, "output_only_datasets", None) is not None:
+                for ds_name in self.args.output_only_datasets:
+                    if ds_name in self.args.multicontext_datasets:
+                        idx_lane = self.args.multicontext_datasets.index(ds_name)
+                        if idx_lane not in output_only_lanes:
+                            output_only_lanes.append(idx_lane)
+            self.model_args['output_only_lanes'] = sorted(output_only_lanes)
+            if self.model_args['output_only_lanes']:
+                print(f"Output-only target lanes (no input wte): {self.model_args['output_only_lanes']}")
+
             if getattr(self.args, "multicontext_loss_weights", None) is not None:
                 self.multicontext_loss_weights = [float(w) for w in self.args.multicontext_loss_weights]
-            elif getattr(self.args, "structural_loss_weight", 1.0) != 1.0 or getattr(self.args, "pos_loss_weight", None) is not None:
+            elif (
+                getattr(self.args, "structural_loss_weight", 1.0) != 1.0
+                or getattr(self.args, "pos_loss_weight", None) is not None
+                or getattr(self.args, "char_loss_weight", None) is not None
+            ):
                 self.multicontext_loss_weights = []
                 sw = float(self.args.structural_loss_weight)
                 pos_w = float(self.args.pos_loss_weight) if getattr(self.args, "pos_loss_weight", None) is not None else (0.5 if sw != 1.0 else 1.0)
+                char_w = float(self.args.char_loss_weight) if getattr(self.args, "char_loss_weight", None) is not None else 1.0
                 for ds in self.args.multicontext_datasets:
                     ds_name = ds.split('/')[-1]
-                    if ds_name == 'char':
+                    if ds_name in ('char', 'char_byte'):
+                        self.multicontext_loss_weights.append(char_w)
+                    elif ds_name == 'script_bpe':
                         self.multicontext_loss_weights.append(1.0)
-                    elif ds_name == 'pos':
+                    elif ds_name in ('pos', 'pos_full'):
                         self.multicontext_loss_weights.append(pos_w)
                     else:
                         self.multicontext_loss_weights.append(sw)
@@ -930,31 +950,21 @@ class Trainer:
         if self.args.training_mode == 'multicontext':
             x_dict = {}
             y_dict = {}
-            ix = None
+            offsets_np = None
             # For each context/dataset, grab a batch
             for dataset_name in self.args.multicontext_datasets:
                 data = (self.train_data_dict[dataset_name]
                         if split == 'train' else self.val_data_dict[dataset_name])
-                if ix is None:
+                if offsets_np is None:
                     ix = torch.randint(len(data) - self.args.block_size, (self.args.batch_size,))
-                # pick random offset
-                x = torch.stack([
-                    torch.from_numpy(data[i : i+self.args.block_size].astype(np.int64))
-                    for i in ix
-                    ])
-                y = torch.stack([
-                    torch.from_numpy(data[i+1 : i+1+self.args.block_size].astype(np.int64))
-                    for i in ix
-                    ])
-                # Move to device
+                    offsets_np = (ix.unsqueeze(1) + torch.arange(self.args.block_size + 1)).numpy()
+                chunk = torch.from_numpy(data[offsets_np].astype(np.int64))
                 if self.device_type == 'cuda':
-                    x = x.pin_memory().to(self.device, non_blocking=True)
-                    y = y.pin_memory().to(self.device, non_blocking=True)
+                    chunk = chunk.to(self.device, non_blocking=True)
                 else:
-                    x, y = x.to(self.device), y.to(self.device)
-
-                x_dict[dataset_name] = x
-                y_dict[dataset_name] = y
+                    chunk = chunk.to(self.device)
+                x_dict[dataset_name] = chunk[:, :-1].contiguous()
+                y_dict[dataset_name] = chunk[:, 1:].contiguous()
 
             return x_dict, y_dict, list(self.args.multicontext_datasets)
 
@@ -1080,14 +1090,13 @@ class Trainer:
 
 
         # Get training and targets
-        x = torch.stack([torch.from_numpy((data[i:i+self.args.block_size]).astype(np.int64)) for i in ix])
-        y = torch.stack([torch.from_numpy((data[i+1:i+1+self.args.block_size]).astype(np.int64)) for i in ix])
-
-        # Send to appropriate device
+        offsets_np = (ix.unsqueeze(1) + torch.arange(self.args.block_size + 1)).numpy()
+        chunk = torch.from_numpy(data[offsets_np].astype(np.int64))
         if self.device_type == 'cuda':
-            x, y = x.pin_memory().to(self.device, non_blocking=True), y.pin_memory().to(self.device, non_blocking=True)
+            chunk = chunk.to(self.device, non_blocking=True)
         else:
-            x, y = x.to(self.device), y.to(self.device)
+            chunk = chunk.to(self.device)
+        x, y = chunk[:, :-1].contiguous(), chunk[:, 1:].contiguous()
         return x, y, dataset
 
     def _distillation_metrics_enabled(self):
@@ -2342,6 +2351,9 @@ class Trainer:
                     ]
                     best_loss_file.write(", ".join(metrics) + "\n")
                 num_steps_with_worse_loss = 0
+                if self.iter_num > 0 and not self.args.never_save_checkpoint:
+                    self.save_checkpoint('best_ckpt.pt')
+                    print(f"Saved best validation checkpoint to {self.args.out_dir}/best_ckpt.pt (loss={self.best_val_loss.item():.4f})")
             if self.iter_num > 0 and not self.args.never_save_checkpoint:
                 print(f"saving checkpoint to {self.args.out_dir}")
                 self.save_checkpoint('ckpt.pt')

@@ -175,15 +175,23 @@ class MulticontextEncoder:
             return token_lists
         else:
             encoded_seq = self.tok.encode_text(text)
-            token_lists = [[] for _ in range(25)]
+            n_lanes = len(self.lane_stois)
+            token_lists = [[] for _ in range(n_lanes)]
             for item in encoded_seq:
                 ch = item["char"]
                 indices = item["indices"]
-                for i in range(24):
-                    token_char = self.tok.token_for(i, indices[i])
-                    token_lists[i].append(self.lane_stois[i].get(token_char, 0))
-                byte_id = self.lane_stois[24].get(ch, ch.encode("utf-8")[0] if len(ch) > 0 and ord(ch) > 255 else 0)
-                token_lists[24].append(byte_id)
+                if n_lanes == 4:
+                    byte_id = self.lane_stois[0].get(ch, ch.encode("utf-8")[0] if len(ch) > 0 and ord(ch) > 255 else 0)
+                    token_lists[0].append(byte_id)
+                    for idx, factor_idx in enumerate([1, 2, 3], start=1):
+                        token_char = self.tok.token_for(factor_idx, indices[factor_idx])
+                        token_lists[idx].append(self.lane_stois[idx].get(token_char, 0))
+                else:
+                    for i in range(24):
+                        token_char = self.tok.token_for(i, indices[i])
+                        token_lists[i].append(self.lane_stois[i].get(token_char, 0))
+                    byte_id = self.lane_stois[24].get(ch, ch.encode("utf-8")[0] if len(ch) > 0 and ord(ch) > 255 else 0)
+                    token_lists[24].append(byte_id)
             return token_lists
 
 

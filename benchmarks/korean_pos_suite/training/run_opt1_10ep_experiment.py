@@ -2,6 +2,20 @@
 """Run 10-Epoch Training of Hangul POS Factorized Tokenizer with opt1_sw_005
 and Evaluate 4 Capabilities + Ko-HellaSwag across 3, 5, 7, and 10 Epoch Checkpoints.
 """
+import os, os as _os, sys as _sys
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+for _p in [
+    _REPO_ROOT,
+    _os.path.join(_REPO_ROOT, "benchmarks"),
+    _os.path.join(_REPO_ROOT, "benchmarks", "korean_pos_suite", "training"),
+    _os.path.join(_REPO_ROOT, "benchmarks", "korean_pos_suite", "evaluations"),
+    _os.path.join(_REPO_ROOT, "benchmarks", "korean_pos_suite", "reporting"),
+    _os.path.join(_REPO_ROOT, "data", "korean_pos_mc"),
+    _os.path.join(_REPO_ROOT, "huggingface_model", "gemma"),
+    _os.path.join(_REPO_ROOT, "data", "template", "utils", "korean"),
+]:
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
 
 import json
 import os
@@ -9,7 +23,7 @@ import subprocess
 import sys
 import time
 
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 DEVICE = "cuda:0"
 MAX_ITERS = 11572
 EVAL_ITERS = 50

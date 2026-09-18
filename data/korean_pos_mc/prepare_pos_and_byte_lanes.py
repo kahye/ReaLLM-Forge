@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 """Prepare Full POS tag lane and 256-Byte Fallback companion stream from 59M token corpus."""
 from __future__ import annotations
+import os, os as _os, sys as _sys
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+for _p in [
+    _REPO_ROOT,
+    _os.path.join(_REPO_ROOT, "benchmarks"),
+    _os.path.join(_REPO_ROOT, "benchmarks", "korean_pos_suite", "training"),
+    _os.path.join(_REPO_ROOT, "benchmarks", "korean_pos_suite", "evaluations"),
+    _os.path.join(_REPO_ROOT, "benchmarks", "korean_pos_suite", "reporting"),
+    _os.path.join(_REPO_ROOT, "data", "korean_pos_mc"),
+    _os.path.join(_REPO_ROOT, "huggingface_model", "gemma"),
+    _os.path.join(_REPO_ROOT, "data", "template", "utils", "korean"),
+]:
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
 
 import os
 import pickle
@@ -10,7 +24,7 @@ from pathlib import Path
 from tqdm import tqdm
 import numpy as np
 
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO_ROOT, "data", "template", "utils", "korean"))
 
 from hangul_factorizer import (
